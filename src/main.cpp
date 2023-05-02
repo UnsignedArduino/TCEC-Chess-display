@@ -85,8 +85,9 @@ void handleWifiConnection() {
   display.print("redirected automatically.");
 
   display.display();
+  display.hibernate();
   
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_STA); // NOLINT(readability-static-accessed-through-instance)
   WiFiManager wm;
 //  wm.resetSettings();
 
@@ -96,11 +97,33 @@ void handleWifiConnection() {
     if (!wm.autoConnect(apName, apPwd)) {
       display.print("Failed to connect, try again!");
       display.display();
+      display.hibernate();
     } else {
       display.print("Connected successfully!");
       display.display();
+      display.hibernate();
       break;
     }
+  }
+}
+
+[[noreturn]] void handleTCECGameDisplay() {
+  display.fillScreen(GxEPD_WHITE);
+  
+  const uint8_t padding = 2;
+  
+  display.setFont(&FreeMonoBold9pt7b);
+  display.setCursor(0 + padding, 9 + padding);
+  display.print("TCEC - Live Computer Chess Broadcast");
+  
+  display.setFont(&FreeMono9pt7b);
+  
+  display.display();
+  
+  display.hibernate();
+  
+  while (true) {
+  
   }
 }
 
@@ -117,12 +140,13 @@ void setup() {
   display.fillScreen(GxEPD_WHITE);
   display.display(false);
   
+  delay(1000);
+  
   handleWifiConnection();
   
-  delay(5000);
-  
-  display.hibernate();
+  delay(1000);
 }
 
 void loop() {
+  handleTCECGameDisplay();
 }
