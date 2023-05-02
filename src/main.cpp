@@ -3,8 +3,13 @@
 #include <Arduino.h>
 #include <GxEPD2_BW.h>
 #include <Fonts/FreeMono9pt7b.h>
+#include <Fonts/FreeMonoBold9pt7b.h>
 #include "GxEPD2_display_selection_new_style.h"
 #include <JPEGDEC.h>
+#include <WiFi.h>
+#include <WiFiType.h>
+#include <WiFiManager.h>
+#include <Random.h>
 
 JPEGDEC jpeg;
 
@@ -47,8 +52,63 @@ int JPEGDraw(JPEGDRAW *pDraw) {
   return 1;
 }
 
+void handleWifiConnection() {
+  display.fillScreen(GxEPD_WHITE);
+  
+  const uint8_t padding = 2;
+  
+  display.setFont(&FreeMonoBold9pt7b);
+  display.setCursor(0 + padding, 9 + padding);
+  display.print("TCEC - Live Computer Chess Broadcast");
+  
+  display.setFont(&FreeMono9pt7b);
+  display.setCursor(0 + padding, 25 + padding);
+  display.print("Connect to WiFi");
+  
+  const char* apName = "TCECWifiSetup";
+  const size_t AP_PWD_SIZE = 9;
+  char apPwd[AP_PWD_SIZE];
+  Random::string(apPwd, AP_PWD_SIZE, true, true, false, false, true);
+  apPwd[AP_PWD_SIZE - 1] = '\0';
+
+  display.setCursor(0 + padding, 57 + padding);
+  display.print("Please connect to the following");
+  display.setCursor(0 + padding, 73 + padding);
+  display.print("network to configure WiFi:");
+  display.setCursor(0 + padding, 105 + padding);
+  display.print("AP name: "); display.print(apName);
+  display.setCursor(0 + padding, 121 + padding);
+  display.print("AP password: "); display.print(apPwd);
+  display.setCursor(0 + padding, 153 + padding);
+  display.print("Go to 192.168.4.1 if you are not");
+  display.setCursor(0 + padding, 169 + padding);
+  display.print("redirected automatically.");
+
+  display.display();
+  
+  WiFi.mode(WIFI_STA);
+  WiFiManager wm;
+//  wm.resetSettings();
+
+  while (true) {
+    display.fillRect(0, 201, display.width(), 9 + padding * 2, GxEPD_WHITE);
+    display.setCursor(0 + padding, 201 + padding);
+    if (!wm.autoConnect(apName, apPwd)) {
+      display.print("Failed to connect, try again!");
+      display.display();
+    } else {
+      display.print("Connected successfully!");
+      display.display();
+      break;
+    }
+  }
+}
+
 void setup() {
   Serial.begin(9600);
+  
+  Random::seedRandom();
+
   display.init(9600, true, 2, false);
   display.setRotation(0);
   display.setFont(&FreeMono9pt7b);
@@ -57,9 +117,11 @@ void setup() {
   display.fillScreen(GxEPD_WHITE);
   display.display(false);
   
-  display.fillScreen(GxEPD_WHITE);
-  display.display(false);
-  display.powerOff();
+  handleWifiConnection();
+  
+  delay(5000);
+  
+  display.hibernate();
 }
 
 void loop() {
