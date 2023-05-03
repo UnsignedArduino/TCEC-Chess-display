@@ -10,12 +10,17 @@
 #include <WiFiType.h>
 #include <WiFiManager.h>
 #include <WiFiClientSecure.h>
+#include <CRC32.h>
 #include <Random.h>
 #include "proxy.h"
 
 JPEGDEC jpeg;
 const size_t JPEG_BUF_MAX_SIZE = 32768;
 uint8_t jpegBuf[JPEG_BUF_MAX_SIZE] = {};
+
+uint32_t lastJpegChecksum = 0;
+
+const uint8_t padding = 2;
 
 int JPEGDraw(JPEGDRAW *pDraw) {
   int x = pDraw->x;
@@ -43,14 +48,12 @@ int JPEGDraw(JPEGDRAW *pDraw) {
 void handleWifiConnection() {
   display.fillScreen(GxEPD_WHITE);
   
-  const uint8_t padding = 2;
-  
   display.setFont(&FreeMonoBold9pt7b);
-  display.setCursor(0 + padding, 9 + padding);
+  display.setCursor(0 + padding, 10 + padding);
   display.print("TCEC - Live Computer Chess Broadcast");
   
   display.setFont(&FreeMono9pt7b);
-  display.setCursor(0 + padding, 25 + padding);
+  display.setCursor(0 + padding, 26 + padding);
   display.print("Connect to WiFi");
   
   const char* apName = "TCECWifiSetup";
@@ -59,17 +62,17 @@ void handleWifiConnection() {
   Random::string(apPwd, AP_PWD_SIZE, true, true, false, false, true);
   apPwd[AP_PWD_SIZE - 1] = '\0';
 
-  display.setCursor(0 + padding, 57 + padding);
+  display.setCursor(0 + padding, 58 + padding);
   display.print("Please connect to the following");
-  display.setCursor(0 + padding, 73 + padding);
+  display.setCursor(0 + padding, 74 + padding);
   display.print("network to configure WiFi:");
-  display.setCursor(0 + padding, 105 + padding);
+  display.setCursor(0 + padding, 106 + padding);
   display.print("AP name: "); display.print(apName);
-  display.setCursor(0 + padding, 121 + padding);
+  display.setCursor(0 + padding, 122 + padding);
   display.print("AP password: "); display.print(apPwd);
-  display.setCursor(0 + padding, 153 + padding);
+  display.setCursor(0 + padding, 154 + padding);
   display.print("Go to 192.168.4.1 if you are not");
-  display.setCursor(0 + padding, 169 + padding);
+  display.setCursor(0 + padding, 170 + padding);
   display.print("redirected automatically.");
 
   display.display();
@@ -80,8 +83,8 @@ void handleWifiConnection() {
 //  wm.resetSettings();
 
   while (true) {
-    display.fillRect(0, 201, display.width(), 9 + padding * 2, GxEPD_WHITE);
-    display.setCursor(0 + padding, 201 + padding);
+    display.fillRect(0, 202, display.width(), 9 + padding * 2, GxEPD_WHITE);
+    display.setCursor(0 + padding, 202 + padding);
     if (!wm.autoConnect(apName, apPwd)) {
       display.print("Failed to connect, try again!");
       display.display();
@@ -95,79 +98,108 @@ void handleWifiConnection() {
   }
 }
 
-[[noreturn]] void handleTCECGameDisplay() {
-  display.fillScreen(GxEPD_WHITE);
-  
-  const uint8_t padding = 2;
-  
-  display.setFont(&FreeMonoBold9pt7b);
-  display.setCursor(0 + padding, 9 + padding);
-  display.print("TCEC - Live Computer Chess Broadcast");
-  
-  display.setFont(&FreeMono9pt7b);
-  
+bool handleUpdateBoardImage() {
   WiFiClientSecure client;
   client.setCACert(SERVER_PROXY_ROOT_CERT);
-  if (client.connect(SERVER_PROXY, 443)) {
-    Serial.print("Connected successfully to ");
-    Serial.print(SERVER_PROXY);
-    Serial.println(" on port 443");
-    client.println("GET /image.jpg?size=250 HTTP/1.1");
-    client.print("Host: ");
-    client.println(SERVER_PROXY);
-    client.println("User-Agent: ArduinoWiFi/1.1");
-    client.println("Connection: close");
-    client.println();
-    Serial.println("Waiting for response");
-    while (client.available() == 0) {
-      delay(5);
-    }
-    Serial.println("Response streaming start");
-    size_t jpegLen = 0;
-    if (!client.find("\r\n\r\n")) {
-      Serial.println("Could not find end of headers!");
-      display.print("Unable to parse response!");
-    } else {
-      while (client.connected() && jpegLen < JPEG_BUF_MAX_SIZE) {
-        if (client.available() > 0) {
+  
+  if (!client.connect(SERVER_PROXY, 443)) {
+    Serial.println("Unable to connect to proxy!");
+    display.setCursor(0 + padding, 26 + padding);
+    display.print("Unable to connect to proxy!");
+    return true;
+  }
+  
+  bool updateScreen = false;
+  
+  Serial.print("Connected successfully to ");
+  Serial.print(SERVER_PROXY);
+  Serial.println(" on port 443");
+  client.println("GET /image.jpg?size=280 HTTP/1.1");
+  client.print("Host: ");
+  client.println(SERVER_PROXY);
+  client.println("User-Agent: ArduinoWiFi/1.1");
+  client.println("Connection: close");
+  client.println();
+  Serial.println("Waiting for response");
+  while (client.available() == 0) {
+    delay(5);
+  }
+  Serial.println("Response streaming start");
+  size_t jpegLen = 0;
+  if (!client.find("\r\n\r\n")) {
+    Serial.println("Could not find end of headers!");
+    display.print("Unable to parse response!");
+  } else {
+    while (client.connected() && jpegLen < JPEG_BUF_MAX_SIZE) {
+      if (client.available() > 0) {
 //          Serial.print(client.peek());
 //          Serial.print(" ");
 //          Serial.write(client.peek());
-          jpegBuf[jpegLen] = client.read();
-          jpegLen ++;
-        }
-      }
-      Serial.print("Response streaming end, received ");
-      Serial.print(jpegLen);
-      Serial.println(" bytes");
-      client.stop();
-      Serial.println("Stopping client");
-      display.setCursor(0 + padding, 25 + padding);
-      if (jpeg.openRAM(jpegBuf, (int16_t)jpegLen, JPEGDraw)) {
-        Serial.println("Successfully parsed JPEG headers");
-        if (jpeg.decode(0 + padding, 15 + padding, 0)) {
-          Serial.println("Successfully decoded JPEG");
-        } else {
-          Serial.println("Failed to decode JPEG");
-          display.print("Failed to decode JPEG!");
-        }
-        jpeg.close();
-      } else {
-        Serial.println("Failed to parse JPEG headers");
-        display.print("Failed to parse JPEG!");
+        jpegBuf[jpegLen] = client.read();
+        jpegLen ++;
       }
     }
-  } else {
-    Serial.println("Unable to connect to proxy!");
-    display.print("Unable to connect to proxy!");
+    Serial.print("Response streaming end, received ");
+    Serial.print(jpegLen);
+    Serial.println(" bytes");
+    client.stop();
+    Serial.println("Stopping client");
+    uint32_t currJpegChecksum = CRC32::calculate(jpegBuf, jpegLen);
+    Serial.print("JPEG CRC32 is 0x");
+    Serial.println(currJpegChecksum, HEX);
+    Serial.print("Last JPEG CRC32 is 0x");
+    Serial.println(lastJpegChecksum, HEX);
+    if (lastJpegChecksum != currJpegChecksum) {
+      lastJpegChecksum = currJpegChecksum;
+      Serial.println("Flagging for screen update");
+      updateScreen = true;
+    } else {
+      Serial.println("Image is still the same");
+    }
+    display.setCursor(0 + padding, 26 + padding);
+    if (jpeg.openRAM(jpegBuf, (int16_t)jpegLen, JPEGDraw)) {
+      Serial.println("Successfully parsed JPEG headers");
+      if (jpeg.decode(0 + padding, 16 + padding, 0)) {
+        Serial.println("Successfully decoded JPEG");
+      } else {
+        Serial.println("Failed to decode JPEG");
+        display.print("Failed to decode JPEG!");
+        updateScreen = true;
+      }
+      jpeg.close();
+    } else {
+      Serial.println("Failed to parse JPEG headers");
+      display.print("Failed to parse JPEG!");
+      updateScreen = true;
+    }
   }
-  
-  display.display();
-  
-  display.hibernate();
+  return updateScreen;
+}
+
+[[noreturn]] void handleTCECGameDisplay() {
+  bool updateScreen = true;
   
   while (true) {
-  
+    display.fillScreen(GxEPD_WHITE);
+    
+    display.setFont(&FreeMonoBold9pt7b);
+    display.setCursor(0 + padding, 10 + padding);
+    display.print("TCEC - Live Computer Chess Broadcast");
+    
+    display.setFont(&FreeMono9pt7b);
+    
+    updateScreen |= handleUpdateBoardImage();
+    
+    if (updateScreen) {
+      Serial.println("Screen needs update");
+      updateScreen = false;
+      display.display();
+      display.hibernate();
+    } else {
+      Serial.println("Screen does not need update");
+    }
+    
+    delay(10000);
   }
 }
 
@@ -189,8 +221,8 @@ void setup() {
   handleWifiConnection();
   
   delay(1000);
-}
-
-void loop() {
+  
   handleTCECGameDisplay();
 }
+
+void loop() { }
