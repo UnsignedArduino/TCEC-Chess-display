@@ -9,9 +9,13 @@
 #include <WiFi.h>
 #include <WiFiType.h>
 #include <WiFiManager.h>
+#include <WiFiClientSecure.h>
 #include <Random.h>
+#include "proxy.h"
 
 JPEGDEC jpeg;
+const size_t JPEG_BUF_MAX_SIZE = 32768;
+uint8_t jpegBuf[JPEG_BUF_MAX_SIZE] = {};
 
 int JPEGDraw(JPEGDRAW *pDraw) {
   int x = pDraw->x;
@@ -19,33 +23,17 @@ int JPEGDraw(JPEGDRAW *pDraw) {
   int w = pDraw->iWidth;
   int h = pDraw->iHeight;
   
-  for(int i = 0; i < w * h; i++) {
-    pDraw->pPixels[i] = (pDraw->pPixels[i] & 0x7e0) >> 5; // extract just the six green channel bits.
-  }
-  
-  for (int j = 0; j < h; j++) {
-    for (int i = 0; i < w; i++) {
-      int8_t oldPixel = constrain(pDraw->pPixels[i + j * w], 0, 0x3F);
-      // or 0x30 to dither to 2-bit directly. much improved tonal range, but more horizontal banding between blocks.
-      int8_t newPixel = oldPixel & 0x38; // NOLINT(cppcoreguidelines-narrowing-conversions)
-      pDraw->pPixels[i + j * w] = newPixel; // NOLINT(cert-str34-c)
-      int quantError = oldPixel - newPixel;
-      if (i + 1 < w) pDraw->pPixels[i + 1 + j * w] += quantError * 7 / 16;
-      if ((i - 1 >= 0) && (j + 1 < h)) pDraw->pPixels[i - 1 + (j + 1) * w] += quantError * 3 / 16;
-      if (j + 1 < h) pDraw->pPixels[i + (j + 1) * w] += quantError * 5 / 16;
-      if ((i + 1 < w) && (j + 1 < h)) pDraw->pPixels[i + 1 + (j + 1) * w] += quantError * 1 / 16;
-    }
+  for(int i = 0; i < w * h; i ++) {
+    pDraw->pPixels[i] = (pDraw->pPixels[i] & 0x7E0) >> 5;
   }
   
   for (int i = 0; i < w; i++) {
     for (int j = 0; j < h; j++) {
-      switch (constrain(pDraw->pPixels[i + j * w] >> 5, 0, 1)) {
-        case 0:
-          display.writePixel(x + i, y + j, GxEPD_BLACK); // NOLINT(cppcoreguidelines-narrowing-conversions)
-          break;
-        case 1:
-          display.writePixel(x + i, y + j, GxEPD_WHITE); // NOLINT(cppcoreguidelines-narrowing-conversions)
-          break;
+      const uint16_t px = pDraw->pPixels[i + j * w];
+      if (px < 32) {
+        display.writePixel(x + i, y + j, GxEPD_BLACK); // NOLINT(cppcoreguidelines-narrowing-conversions)
+      } else {
+        display.writePixel(x + i, y + j, GxEPD_WHITE); // NOLINT(cppcoreguidelines-narrowing-conversions)
       }
     }
   }
@@ -117,6 +105,62 @@ void handleWifiConnection() {
   display.print("TCEC - Live Computer Chess Broadcast");
   
   display.setFont(&FreeMono9pt7b);
+  
+  WiFiClientSecure client;
+  client.setCACert(SERVER_PROXY_ROOT_CERT);
+  if (client.connect(SERVER_PROXY, 443)) {
+    Serial.print("Connected successfully to ");
+    Serial.print(SERVER_PROXY);
+    Serial.println(" on port 443");
+    client.println("GET /image.jpg?size=250 HTTP/1.1");
+    client.print("Host: ");
+    client.println(SERVER_PROXY);
+    client.println("User-Agent: ArduinoWiFi/1.1");
+    client.println("Connection: close");
+    client.println();
+    Serial.println("Waiting for response");
+    while (client.available() == 0) {
+      delay(5);
+    }
+    Serial.println("Response streaming start");
+    size_t jpegLen = 0;
+    if (!client.find("\r\n\r\n")) {
+      Serial.println("Could not find end of headers!");
+      display.print("Unable to parse response!");
+    } else {
+      while (client.connected() && jpegLen < JPEG_BUF_MAX_SIZE) {
+        if (client.available() > 0) {
+//          Serial.print(client.peek());
+//          Serial.print(" ");
+//          Serial.write(client.peek());
+          jpegBuf[jpegLen] = client.read();
+          jpegLen ++;
+        }
+      }
+      Serial.print("Response streaming end, received ");
+      Serial.print(jpegLen);
+      Serial.println(" bytes");
+      client.stop();
+      Serial.println("Stopping client");
+      display.setCursor(0 + padding, 25 + padding);
+      if (jpeg.openRAM(jpegBuf, (int16_t)jpegLen, JPEGDraw)) {
+        Serial.println("Successfully parsed JPEG headers");
+        if (jpeg.decode(0 + padding, 15 + padding, 0)) {
+          Serial.println("Successfully decoded JPEG");
+        } else {
+          Serial.println("Failed to decode JPEG");
+          display.print("Failed to decode JPEG!");
+        }
+        jpeg.close();
+      } else {
+        Serial.println("Failed to parse JPEG headers");
+        display.print("Failed to parse JPEG!");
+      }
+    }
+  } else {
+    Serial.println("Unable to connect to proxy!");
+    display.print("Unable to connect to proxy!");
+  }
   
   display.display();
   
